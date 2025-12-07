@@ -3,38 +3,16 @@ from flask_cors import CORS
 import os
 import tempfile
 import json
-import traceback
+import re
 import uuid
 from datetime import datetime
-import sys
-import re
-from collections import Counter
-import nltk
-from nltk.corpus import stopwords
-from nltk.tokenize import word_tokenize
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
 import PyPDF2
-from docx import Document
 
 app = Flask(__name__)
 CORS(app)
 
-# Download NLTK data
-try:
-    nltk.download('punkt', quiet=True)
-    nltk.download('stopwords', quiet=True)
-    nltk_stopwords = set(stopwords.words('english'))
-except:
-    nltk_stopwords = set()
-
-# Configuration
-UPLOAD_FOLDER = tempfile.gettempdir()
-ALLOWED_EXTENSIONS = {'pdf', 'docx', 'txt'}
-
+# Simple document reader
 class DocumentReader:
-    """Simple document reader without heavy dependencies"""
-    
     @staticmethod
     def read_pdf(filepath: str) -> str:
         """Read PDF file using PyPDF2"""
@@ -47,19 +25,6 @@ class DocumentReader:
                 return text.strip()
         except Exception as e:
             print(f"Error reading PDF: {e}")
-            return ""
-    
-    @staticmethod
-    def read_docx(filepath: str) -> str:
-        """Read DOCX file"""
-        try:
-            doc = Document(filepath)
-            text = ""
-            for para in doc.paragraphs:
-                text += para.text + "\n"
-            return text.strip()
-        except Exception as e:
-            print(f"Error reading DOCX: {e}")
             return ""
     
     @staticmethod
@@ -79,274 +44,197 @@ class DocumentReader:
         
         if ext == '.pdf':
             return DocumentReader.read_pdf(filepath)
-        elif ext == '.docx':
-            return DocumentReader.read_docx(filepath)
         elif ext == '.txt':
             return DocumentReader.read_txt(filepath)
         else:
-            raise ValueError(f"Unsupported file format: {ext}")
+            # For DOCX, just return empty string or implement simple text extraction
+            return ""
 
-class ResumeAnalyzer:
-    """Lightweight resume analyzer without spaCy"""
+class SimpleATSAnalyzer:
+    """Simple ATS analyzer without heavy dependencies"""
     
     def __init__(self):
-        self.technical_skills = {
-            'python', 'java', 'javascript', 'c++', 'c#', 'sql', 'aws', 'azure', 'gcp',
-            'docker', 'kubernetes', 'react', 'angular', 'vue', 'nodejs', 'django', 'flask',
-            'fastapi', 'spring', 'microservices', 'machine learning', 'deep learning', 'ai',
-            'data science', 'analytics', 'pandas', 'numpy', 'scikit-learn', 'pytorch',
-            'tensorflow', 'spark', 'hadoop', 'kafka', 'airflow', 'tableau', 'power bi',
-            'git', 'ci/cd', 'devops', 'rest', 'graphql', 'api', 'linux', 'bash',
-            'postgresql', 'mysql', 'mongodb', 'redis', 'elasticsearch', 'jira'
-        }
+        self.technical_skills = [
+            'python', 'java', 'javascript', 'sql', 'aws', 'azure', 'docker',
+            'kubernetes', 'react', 'angular', 'nodejs', 'django', 'flask',
+            'machine learning', 'data science', 'pandas', 'numpy', 'git',
+            'linux', 'postgresql', 'mysql', 'mongodb', 'rest api'
+        ]
         
-        self.soft_skills = {
+        self.soft_skills = [
             'leadership', 'communication', 'teamwork', 'problem solving',
-            'analytical', 'creative', 'adaptable', 'organized', 'detail-oriented',
-            'collaborative', 'strategic', 'innovative', 'motivated', 'ownership',
-            'stakeholder management', 'mentoring', 'presentation', 'negotiation'
-        }
+            'analytical', 'creative', 'adaptable', 'organized', 'collaborative'
+        ]
     
-    def extract_keywords(self, text: str, top_n: int = 30) -> list:
-        """Extract keywords using NLTK"""
-        # Convert to lowercase and tokenize
-        words = word_tokenize(text.lower())
+    def analyze(self, resume_text: str, jd_text: str) -> dict:
+        """Simple analysis function"""
+        resume_lower = resume_text.lower()
+        jd_lower = jd_text.lower()
         
-        # Remove stopwords and non-alphabetic tokens
-        words = [word for word in words 
-                if word.isalpha() and word not in nltk_stopwords and len(word) > 2]
+        # Calculate keyword matches
+        resume_words = set(re.findall(r'\b\w+\b', resume_lower))
+        jd_words = set(re.findall(r'\b\w+\b', jd_lower))
         
-        # Get frequency distribution
-        freq_dist = Counter(words)
+        common_words = resume_words.intersection(jd_words)
         
-        # Return top keywords
-        return [word for word, _ in freq_dist.most_common(top_n)]
-    
-    def extract_skills(self, text: str) -> dict:
-        """Extract skills from text"""
-        text_lower = text.lower()
+        # Check for skills
+        found_tech_skills = []
+        missing_tech_skills = []
         
-        found_technical = []
-        found_soft = []
-        
-        # Check for technical skills
         for skill in self.technical_skills:
-            if skill in text_lower:
-                found_technical.append(skill)
+            if skill in jd_lower:
+                if skill in resume_lower:
+                    found_tech_skills.append(skill)
+                else:
+                    missing_tech_skills.append(skill)
         
-        # Check for soft skills
-        for skill in self.soft_skills:
-            if skill in text_lower:
-                found_soft.append(skill)
-        
-        return {
-            'technical': found_technical,
-            'soft': found_soft
-        }
-    
-    def calculate_similarity(self, text1: str, text2: str) -> float:
-        """Calculate similarity between two texts using TF-IDF"""
-        try:
-            vectorizer = TfidfVectorizer(stop_words='english', max_features=1000)
-            tfidf_matrix = vectorizer.fit_transform([text1, text2])
-            similarity = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:2])[0][0]
-            return float(max(0.0, min(1.0, similarity)))
-        except:
-            return 0.0
-    
-    def analyze_resume(self, resume_text: str, jd_text: str) -> dict:
-        """Main analysis function"""
-        # Extract keywords
-        resume_keywords = self.extract_keywords(resume_text)
-        jd_keywords = self.extract_keywords(jd_text)
-        
-        # Find matches
-        matched_keywords = list(set(resume_keywords) & set(jd_keywords))
-        missing_keywords = list(set(jd_keywords) - set(resume_keywords))
-        
-        # Extract skills
-        resume_skills = self.extract_skills(resume_text)
-        jd_skills = self.extract_skills(jd_text)
-        
-        # Find skill matches
-        matched_technical = list(set(resume_skills['technical']) & set(jd_skills['technical']))
-        missing_technical = list(set(jd_skills['technical']) - set(resume_skills['technical']))
-        
-        matched_soft = list(set(resume_skills['soft']) & set(jd_skills['soft']))
-        missing_soft = list(set(jd_skills['soft']) - set(resume_skills['soft']))
-        
-        # Calculate similarity
-        similarity = self.calculate_similarity(resume_text, jd_text)
-        
-        # Calculate scores
-        keyword_score = min(3.0, (len(matched_keywords) / max(1, len(jd_keywords))) * 3.0)
-        skills_score = min(2.0, ((len(matched_technical) + len(matched_soft)) / 
-                                max(1, len(jd_skills['technical']) + len(jd_skills['soft']))) * 2.0)
-        similarity_score = similarity * 1.0
+        # Calculate simple score (0-10)
+        keyword_match_score = min(3.0, (len(common_words) / max(1, len(jd_words))) * 3)
+        skill_match_score = min(2.0, (len(found_tech_skills) / max(1, len([s for s in self.technical_skills if s in jd_lower]))) * 2)
         
         # Check structure
         structure_score = self._check_structure(resume_text)
         
-        # Calculate total score (out of 10)
-        total_score = round(keyword_score + skills_score + similarity_score + structure_score, 2)
+        # Similarity (simple word overlap)
+        similarity = len(common_words) / max(1, len(jd_words))
+        relevance_score = min(1.0, similarity)
         
-        # Generate recommendations
-        recommendations = self._generate_recommendations(
-            matched_keywords, missing_keywords,
-            matched_technical, missing_technical,
-            matched_soft, missing_soft,
-            similarity
-        )
+        # Total score
+        total_score = round(keyword_match_score + skill_match_score + structure_score + relevance_score, 2)
+        
+        # Recommendations
+        recommendations = []
+        if missing_tech_skills:
+            recommendations.append(f"Add missing technical skills: {', '.join(missing_tech_skills[:3])}")
+        if keyword_match_score < 2:
+            recommendations.append("Add more keywords from the job description to your resume")
+        if structure_score < 1:
+            recommendations.append("Improve resume structure: include clear Experience, Education, and Skills sections")
         
         return {
             'total_score': total_score,
-            'scores': {
-                'keyword_matching': round(keyword_score, 2),
-                'skills_match': round(skills_score, 2),
-                'experience_relevance': round(similarity_score, 2),
-                'structure': round(structure_score, 2)
+            'breakdown': {
+                'keyword_matching': round(keyword_match_score, 2),
+                'skills_match': round(skill_match_score, 2),
+                'structure': round(structure_score, 2),
+                'relevance': round(relevance_score, 2)
             },
-            'keywords': {
-                'resume': resume_keywords[:20],
-                'jd': jd_keywords[:20],
-                'matched': matched_keywords[:15],
-                'missing': missing_keywords[:15]
+            'skills_analysis': {
+                'found_technical': found_tech_skills,
+                'missing_technical': missing_tech_skills,
+                'common_keywords': list(common_words)[:20]
             },
-            'skills': {
-                'resume_technical': resume_skills['technical'],
-                'resume_soft': resume_skills['soft'],
-                'jd_technical': jd_skills['technical'],
-                'jd_soft': jd_skills['soft'],
-                'matched_technical': matched_technical,
-                'missing_technical': missing_technical,
-                'matched_soft': matched_soft,
-                'missing_soft': missing_soft
-            },
-            'similarity': round(similarity, 3),
             'recommendations': recommendations,
-            'structure_analysis': self._analyze_structure(resume_text)
+            'metrics': {
+                'resume_length': len(resume_text),
+                'jd_length': len(jd_text),
+                'word_overlap': len(common_words),
+                'similarity_percentage': round(similarity * 100, 1)
+            }
         }
     
     def _check_structure(self, text: str) -> float:
-        """Check resume structure"""
+        """Check basic resume structure"""
         score = 0.0
-        
-        # Check for sections
         text_lower = text.lower()
-        sections = ['experience', 'education', 'skills', 'work', 'employment']
-        found_sections = sum(1 for section in sections if section in text_lower)
-        score += min(0.5, found_sections / 3 * 0.5)
+        
+        # Check for common sections
+        sections = ['experience', 'education', 'skills']
+        found_sections = [s for s in sections if s in text_lower]
+        
+        if len(found_sections) >= 2:
+            score += 0.5
+        if len(found_sections) == 3:
+            score += 0.3
         
         # Check for contact info
-        has_email = bool(re.search(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', text))
-        has_phone = bool(re.search(r'\b(?:\+?\d{1,3}[-.\s]?)?(?:\d{3}[-.\s]?\d{3}[-.\s]?\d{4})\b', text))
-        contact_score = (1 if has_email else 0) + (1 if has_phone else 0)
-        score += min(0.3, contact_score / 2 * 0.3)
+        has_email = bool(re.search(r'\S+@\S+\.\S+', text))
+        has_phone = bool(re.search(r'\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}', text))
+        
+        if has_email:
+            score += 0.1
+        if has_phone:
+            score += 0.1
         
         # Check for bullet points
-        bullet_patterns = ['•', '- ', '* ', '· ']
-        has_bullets = any(pattern in text for pattern in bullet_patterns)
-        score += 0.2 if has_bullets else 0.0
+        if any(c in text for c in ['•', '- ', '* ']):
+            score += 0.3
         
         return min(1.5, score)
-    
-    def _analyze_structure(self, text: str) -> dict:
-        """Analyze resume structure"""
-        text_lower = text.lower()
-        
-        sections_found = []
-        for section in ['experience', 'education', 'skills']:
-            if section in text_lower:
-                sections_found.append(section)
-        
-        has_email = bool(re.search(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', text))
-        has_phone = bool(re.search(r'\b(?:\+?\d{1,3}[-.\s]?)?(?:\d{3}[-.\s]?\d{3}[-.\s]?\d{4})\b', text))
-        
-        return {
-            'sections_found': sections_found,
-            'sections_missing': [s for s in ['experience', 'education', 'skills'] if s not in text_lower],
-            'has_contact': {
-                'email': has_email,
-                'phone': has_phone
-            },
-            'has_bullets': any(pattern in text for pattern in ['•', '- ', '* ', '· '])
-        }
-    
-    def _generate_recommendations(self, matched_keywords, missing_keywords,
-                                 matched_technical, missing_technical,
-                                 matched_soft, missing_soft, similarity) -> list:
-        """Generate recommendations"""
-        recommendations = []
-        
-        if len(missing_keywords) > 0:
-            recommendations.append(f"Add these keywords from the job description: {', '.join(missing_keywords[:5])}")
-        
-        if len(missing_technical) > 0:
-            recommendations.append(f"Consider highlighting these technical skills: {', '.join(missing_technical[:3])}")
-        
-        if len(missing_soft) > 0:
-            recommendations.append(f"Emphasize these soft skills: {', '.join(missing_soft[:3])}")
-        
-        if similarity < 0.5:
-            recommendations.append("Tailor your resume more closely to the job description.")
-        
-        return recommendations
 
 # Initialize analyzer
-analyzer = ResumeAnalyzer()
+analyzer = SimpleATSAnalyzer()
+doc_reader = DocumentReader()
 
-def allowed_file(filename):
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+@app.route('/')
+def home():
+    return jsonify({
+        'service': 'ATS Resume Analyzer API',
+        'status': 'running',
+        'endpoints': {
+            '/api/health': 'GET - Health check',
+            '/api/analyze': 'POST - Analyze resume (files)',
+            '/api/analyze-text': 'POST - Analyze resume (text)',
+            '/api/test': 'GET - Test analysis'
+        }
+    })
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
     return jsonify({
         'status': 'healthy',
         'timestamp': datetime.now().isoformat(),
-        'service': 'ATS Resume Analyzer API',
         'version': '1.0'
     })
 
 @app.route('/api/analyze', methods=['POST'])
 def analyze_resume():
-    """Analyze resume from file upload"""
     try:
-        if 'resume' not in request.files or 'job_description' not in request.files:
-            return jsonify({'error': 'Both resume and job description files are required'}), 400
+        if 'resume' not in request.files:
+            return jsonify({'error': 'Resume file is required'}), 400
         
         resume_file = request.files['resume']
-        jd_file = request.files['job_description']
         
-        if resume_file.filename == '' or jd_file.filename == '':
-            return jsonify({'error': 'No selected file'}), 400
+        if resume_file.filename == '':
+            return jsonify({'error': 'No resume file selected'}), 400
         
-        if not (allowed_file(resume_file.filename) and allowed_file(jd_file.filename)):
-            return jsonify({'error': 'Invalid file type'}), 400
+        # Save file temporarily
+        temp_filename = f"temp_{uuid.uuid4().hex}.pdf"
+        temp_path = os.path.join(tempfile.gettempdir(), temp_filename)
+        resume_file.save(temp_path)
         
-        # Save files temporarily
-        resume_filename = f"resume_{uuid.uuid4().hex}{os.path.splitext(resume_file.filename)[1]}"
-        jd_filename = f"jd_{uuid.uuid4().hex}{os.path.splitext(jd_file.filename)[1]}"
-        
-        resume_path = os.path.join(UPLOAD_FOLDER, resume_filename)
-        jd_path = os.path.join(UPLOAD_FOLDER, jd_filename)
-        
-        resume_file.save(resume_path)
-        jd_file.save(jd_path)
-        
-        # Read documents
-        doc_reader = DocumentReader()
-        resume_text = doc_reader.read_document(resume_path)
-        jd_text = doc_reader.read_document(jd_path)
+        # Read resume
+        resume_text = doc_reader.read_document(temp_path)
         
         # Clean up
         try:
-            os.remove(resume_path)
-            os.remove(jd_path)
+            os.remove(temp_path)
         except:
             pass
         
+        # Get job description text
+        jd_text = ""
+        if 'job_description' in request.files:
+            jd_file = request.files['job_description']
+            if jd_file.filename != '':
+                jd_temp = f"jd_{uuid.uuid4().hex}.txt"
+                jd_path = os.path.join(tempfile.gettempdir(), jd_temp)
+                jd_file.save(jd_path)
+                jd_text = doc_reader.read_document(jd_path)
+                try:
+                    os.remove(jd_path)
+                except:
+                    pass
+        
+        # If no JD file, check for text
+        if not jd_text and request.form.get('jd_text'):
+            jd_text = request.form.get('jd_text')
+        
+        if not jd_text:
+            return jsonify({'error': 'Job description is required'}), 400
+        
         # Analyze
-        analysis = analyzer.analyze_resume(resume_text, jd_text)
+        analysis = analyzer.analyze(resume_text, jd_text)
         
         return jsonify({
             'success': True,
@@ -362,9 +250,9 @@ def analyze_resume():
 
 @app.route('/api/analyze-text', methods=['POST'])
 def analyze_text():
-    """Analyze resume from text input"""
     try:
-        data = request.json
+        data = request.json or request.form
+        
         resume_text = data.get('resume_text', '')
         jd_text = data.get('jd_text', '')
         
@@ -372,7 +260,7 @@ def analyze_text():
             return jsonify({'error': 'Both resume_text and jd_text are required'}), 400
         
         # Analyze
-        analysis = analyzer.analyze_resume(resume_text, jd_text)
+        analysis = analyzer.analyze(resume_text, jd_text)
         
         return jsonify({
             'success': True,
@@ -388,48 +276,41 @@ def analyze_text():
 
 @app.route('/api/test', methods=['GET'])
 def test_endpoint():
-    """Test endpoint"""
+    """Test endpoint with sample data"""
     test_resume = """
-    John Doe
-    Senior Software Engineer
-    Email: john.doe@email.com
-    Phone: (123) 456-7890
+    John Doe - Software Engineer
+    Email: john@example.com | Phone: (123) 456-7890
     
     EXPERIENCE
-    Senior Software Engineer - Tech Company (2020-Present)
-    • Developed scalable microservices using Python and FastAPI
-    • Implemented CI/CD pipelines with Docker and Kubernetes
-    • Led a team of 5 developers on key projects
+    Senior Developer at TechCorp (2020-Present)
+    • Built web applications using Python and JavaScript
+    • Managed AWS infrastructure
+    • Implemented CI/CD pipelines
     
     EDUCATION
-    BS Computer Science - University of Technology (2016-2020)
+    BS Computer Science - State University (2016-2020)
     
     SKILLS
-    Python, JavaScript, AWS, Docker, Kubernetes, React, SQL
+    Python, JavaScript, AWS, Docker, Git, SQL
     """
     
     test_jd = """
-    Software Engineer
-    We are looking for a skilled Software Engineer with experience in:
-    - Python development
-    - Microservices architecture
-    - Docker and Kubernetes
+    Software Developer
+    
+    Looking for a developer with experience in:
+    - Python programming
+    - Web development
     - AWS cloud services
-    - REST APIs
+    - Docker containers
     
-    Required Skills:
-    • Python programming (3+ years)
-    • Docker containerization
-    • Cloud experience (AWS preferred)
-    • CI/CD pipelines
-    
-    Nice to have:
-    • React or Angular
-    • Database design
-    • Team leadership
+    Requirements:
+    • 2+ years Python experience
+    • Knowledge of web frameworks
+    • Cloud computing experience
+    • Version control with Git
     """
     
-    analysis = analyzer.analyze_resume(test_resume, test_jd)
+    analysis = analyzer.analyze(test_resume, test_jd)
     
     return jsonify({
         'success': True,

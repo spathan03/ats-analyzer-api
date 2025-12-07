@@ -1,8 +1,5 @@
 #!/bin/bash
-echo "Starting build process..."
-
-# Install Python dependencies
+echo "Installing dependencies..."
 pip install --upgrade pip
 pip install -r requirements.txt
-
-echo "Build completed successfully!"
+echo "✅ Dependencies installed successfully!"
